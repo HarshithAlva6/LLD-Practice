@@ -19,6 +19,9 @@
 #pip install fastapi tiktoken numpy openai uvicorn
 #Get keys from https://platform.openai.com/api-keys
 
+#pip install chromadb python-dotenv
+#pip install uvicorn 
+
 from fastapi import FastAPI
 from pydantic import BaseModel
 import tiktoken
@@ -34,6 +37,7 @@ client = OpenAI(api_key=api_key)
 
 class TextRequest(BaseModel):
     text: str
+    
 def cosine_similarity(vec1, vec2):
     dot_product = np.dot(vec1, vec2)
     norm_a = np.linalg.norm(vec1)
