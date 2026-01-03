@@ -24,15 +24,30 @@ class QueryRequest(BaseModel):
 
 @app.post("/addCollection")
 async def add_to_collection(request: DocumentsRequest):
-    texts = request.texts
-    if not texts:
+    chunks = chunk_text(request.texts)
+    if not chunks:
         raise HTTPException(status_code=400, detail="No texts provided")
 
-    resp = client.embeddings.create(input=texts, model="text-embedding-3-small")
+    resp = client.embeddings.create(input=chunks, model="text-embedding-3-small")
     embeddings = [d.embedding for d in resp.data]
-    ids = [str(uuid4()) for _ in texts]
-    collection.add(documents=texts, embeddings=embeddings, ids=ids)
+    ids = [str(uuid4()) for _ in chunks]
+    metadata = [{"source": "policies.pdf", "chunk_index": i} for i in range(len(chunks))]
+    collection.add(
+        documents=chunks,
+        embeddings=embeddings,
+        ids=ids,
+        metadatas=metadata
+    )
     return {"ids": ids}
+
+def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> List[str]:
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = start+chunk_size
+        chunks.append(text[start:end])
+        start += chunk_size - overlap
+    return chunks
 
 @app.post("/query")
 async def query_collection(request: QueryRequest):
