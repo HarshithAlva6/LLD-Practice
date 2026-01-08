@@ -1,9 +1,11 @@
 import chromadb
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from uuid import uuid4
 from typing import List
 from main import client
+from data import DocumentsRequest, QueryRequest, ChatRequest
 
 app = FastAPI()
 
@@ -16,11 +18,19 @@ except AttributeError:
     except Exception:
         collection = chroma_client.create_collection(name="documents")
 
-class DocumentsRequest(BaseModel):
-    texts: List[str]
 
-class QueryRequest(BaseModel):
-    query: str
+async def stream_generation(messages):
+    stream = client.chat.completions.create(
+        model="gpt-4o",
+        messages=messages,
+        stream=True
+    )
+
+    for chunk in stream:
+        if chunk.choices[0].delta.content:
+            content = chunk.choices[0].delta.content
+            yield f"data: {content}\n\n"
+    yield "data: [DONE]\n\n"
 
 @app.post("/addCollection")
 async def add_to_collection(request: DocumentsRequest):
@@ -61,7 +71,7 @@ async def query_collection(request: QueryRequest):
     try:
         result = collection.query(queries=[q_emb], n_results=1)
     except TypeError:
-        result = collection.query(query_embeddings=[q_emb], n_results=1)
+        result = collection.query(query_embeddings=[q_emb], n_results=3) # Multi Chunk Retrieval / Top "K" Shift
 
     # Extract the top document
     top_doc = result["documents"][0][0] if result["documents"] and result["documents"][0] else None
@@ -89,4 +99,40 @@ async def query_collection(request: QueryRequest):
     return {
         "answer": answer,
         "source_document": top_doc
+    }
+
+@app.post("/chat")
+async def chat_with_context(request: ChatRequest, stream: bool = False):
+    query = request.messages[-1].content if request.messages else ""
+    if not query:
+        raise HTTPException(status_code=400, detail="Empty query")
+    
+    # Retrieve (The 'R' in RAG)
+    resp = client.embeddings.create(input=query, model="text-embedding-3-small")
+    q_emb = resp.data[0].embedding
+    try:
+        result = collection.query(queries=[q_emb], n_results=3)
+    except TypeError:
+        result = collection.query(query_embeddings=[q_emb], n_results=3) # Multi Chunk Retrieval / Top "K" Shift
+
+    top_docs = result["documents"][0] if result["documents"] else []
+    top_doc = "\n---\n".join(top_docs)
+
+    top_metadata = result["metadatas"][0][0] if result["metadatas"] else []
+    llm_message = [
+        {"role": "system", "content": f"You are a helpful assistant. Use the following context snippets to answer:{top_doc}"}
+    ] + [{"role": msg.role, "content": msg.content} for msg in request.messages]
+
+    if stream:
+        return StreamingResponse(stream_generation(llm_message), media_type="text/event-stream")
+    else:
+        generation = client.chat.completions.create(
+            model="gpt-4o",
+            messages=llm_message
+         )
+
+    return {
+        "answer": generation.choices[0].message.content,
+        "source_document": top_docs[0] if top_docs else "No source found",
+        "metadata": top_metadata
     }
