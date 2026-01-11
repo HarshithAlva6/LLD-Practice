@@ -65,3 +65,9 @@ async def embed_text(request: TextRequest):
 
 # To run the app, use the command:
 # uvicorn main:app --reload
+
+@app.get("/health")
+async def health_check():
+    return {"status": "online",
+            "version": "1.0.0",
+            "provider": "OpenAI"}

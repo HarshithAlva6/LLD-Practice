@@ -1,5 +1,5 @@
 import chromadb
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from uuid import uuid4
@@ -19,7 +19,7 @@ except AttributeError:
         collection = chroma_client.create_collection(name="documents")
 
 
-async def stream_generation(messages):
+async def stream_generation(messages, request: Request):
     stream = client.chat.completions.create(
         model="gpt-4o",
         messages=messages,
@@ -27,6 +27,10 @@ async def stream_generation(messages):
     )
 
     for chunk in stream:
+        if await request.is_disconnected():
+            print("Client disconnected, stopping stream.")
+            break
+        
         if chunk.choices[0].delta.content:
             content = chunk.choices[0].delta.content
             yield f"data: {content}\n\n"
@@ -102,8 +106,8 @@ async def query_collection(request: QueryRequest):
     }
 
 @app.post("/chat")
-async def chat_with_context(request: ChatRequest, stream: bool = False):
-    query = request.messages[-1].content if request.messages else ""
+async def chat_with_context(request: Request, chat_request: ChatRequest, stream: bool = False):
+    query = chat_request.messages[-1].content if chat_request.messages else ""
     if not query:
         raise HTTPException(status_code=400, detail="Empty query")
     
@@ -124,7 +128,7 @@ async def chat_with_context(request: ChatRequest, stream: bool = False):
     ] + [{"role": msg.role, "content": msg.content} for msg in request.messages]
 
     if stream:
-        return StreamingResponse(stream_generation(llm_message), media_type="text/event-stream")
+        return StreamingResponse(stream_generation(llm_message, request), media_type="text/event-stream")
     else:
         generation = client.chat.completions.create(
             model="gpt-4o",
